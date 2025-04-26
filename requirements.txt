@@ -1,0 +1,7 @@
+# requirements.txt
+neo4j==5.21.0 # Or the latest compatible version with your Neo4j Desktop
+spacy==3.7.5 # Or the latest compatible version
+requests==2.31.0 # Or the latest version
+python-dotenv==1.0.0 # Or the latest version
+# configparser and argparse are built-in
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz
