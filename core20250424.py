@@ -10,6 +10,8 @@ import spacy
 from collections import deque
 import datetime
 import json # Might be useful for parsing initial data or LLM output
+import warnings
+from pathlib import Path
 
 # --- Configuration and Setup ---
 
@@ -35,7 +37,14 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 neo4j_driver = None
 config = None
 nlp = None # spaCy model
+nlp_large = None # Larger spaCy model for advanced analysis
+coref_nlp = None # spaCy model with coreference resolution
 google_api_call_timestamps = deque(maxlen=5) # For Google rate limiting
+
+# --- Model Configuration ---
+SPACY_MODEL_SMALL = "en_core_web_sm"  # Default small model
+SPACY_MODEL_LARGE = "en_core_web_lg"  # Larger model with word vectors
+USE_COREF = False  # Whether to use coreference resolution (requires neuralcoref)
 
 # --- Placeholder for Initial Data ---
 # In a real scenario, this would be loaded from data/expected_data.py or another file
@@ -146,8 +155,59 @@ def test_4_load_initial_data():
         log_message(f"Test 4 Failed: Could not load initial data. Error: {e}")
         return (False, None, None)
 
-def call_llm_api(api_name, model_name, system_prompt, query_prompt, model_params):
-    """Calls the specified LLM API with the given prompts and parameters."""
+def call_llm_api(api_name, model_name, system_prompt, query_prompt, model_params, use_file_response=False, file_path="Raw Response Text.txt"):
+    """Calls the specified LLM API with the given prompts and parameters.
+
+    If use_file_response is True, reads the response from the specified file instead of making an API call.
+    """
+    if use_file_response:
+        print(f"Using file-based response from {file_path} instead of calling LLM API")
+        log_message(f"Using file-based response from {file_path} instead of calling LLM API")
+
+        try:
+            # Read the raw response from the file
+            with open(file_path, 'r', encoding='utf-8') as f:
+                raw_response_text = f.read()
+
+            # Create a mock response JSON structure based on the API type
+            if api_name.lower() == "groq":
+                # Mimic Groq/OpenAI response structure
+                mock_response = {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": raw_response_text
+                            }
+                        }
+                    ]
+                }
+            elif api_name.lower() == "google":
+                # Mimic Google Gemini response structure
+                mock_response = {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": raw_response_text}
+                                ]
+                            }
+                        }
+                    ]
+                }
+            else:
+                print(f"Error: Unknown API name specified for file-based response: {api_name}")
+                log_message(f"Error: Unknown API name specified for file-based response: {api_name}")
+                return None
+
+            log_message(f"Successfully loaded file-based response")
+            return mock_response
+
+        except Exception as e:
+            print(f"Error loading file-based response from {file_path}: {e}")
+            log_message(f"Error loading file-based response: {e}")
+            return None
+
+    # If not using file-based response, proceed with normal API call
     print(f"Calling LLM API: {api_name} with model {model_name}")
     log_message(f"Calling LLM API: {api_name} with model {model_name}")
 
@@ -278,6 +338,28 @@ def parse_llm_response(llm_response_json, config):
 
 
     log_message(f"Raw Response Text:\n---\n{response_text}\n---")
+
+    # Handle <think> sections in the response by removing them
+    # Some LLMs include thinking steps enclosed in <think> tags
+    if "<think>" in response_text and "</think>" in response_text:
+        think_start = response_text.find("<think>")
+        think_end = response_text.find("</think>") + len("</think>")
+
+        # Remove the think section
+        print("Detected <think> section in response. Removing it before parsing...")
+        log_message("Detected <think> section in response. Removing it before parsing.")
+
+        # Extract the parts before and after the think section
+        before_think = response_text[:think_start].strip()
+        after_think = response_text[think_end:].strip()
+
+        # Combine the parts, with a space if both parts exist
+        if before_think and after_think:
+            response_text = before_think + "\n\n" + after_think
+        else:
+            response_text = before_think + after_think
+
+        log_message(f"Response after removing <think> section:\n---\n{response_text}\n---")
 
     # Get format details from config
     try:
@@ -472,24 +554,70 @@ def verify_neo4j_content(neo4j_driver, expected_triplets):
         return {"status": "error", "error": str(e)}
 
 def load_spacy_model():
-    """Loads the spaCy language model."""
-    global nlp
-    print("\nLoading spaCy model 'en_core_web_sm'...")
-    log_message("Loading spaCy model 'en_core_web_sm'")
+    """Loads the spaCy language models."""
+    global nlp, nlp_large, coref_nlp
+
+    # Load the small model (always required)
+    print(f"\nLoading spaCy model '{SPACY_MODEL_SMALL}'...")
+    log_message(f"Loading spaCy model '{SPACY_MODEL_SMALL}'")
     try:
-        nlp = spacy.load("en_core_web_sm")
-        print("spaCy model loaded.")
-        log_message("spaCy model loaded.")
-        return True
+        nlp = spacy.load(SPACY_MODEL_SMALL)
+        print(f"spaCy model {SPACY_MODEL_SMALL} loaded.")
+        log_message(f"spaCy model {SPACY_MODEL_SMALL} loaded.")
     except Exception as e:
-        print(f"Error loading spaCy model. Have you run 'python -m spacy download en_core_web_sm'? Error: {e}")
-        log_message(f"Error loading spaCy model. Error: {e}")
+        print(f"Error loading spaCy model {SPACY_MODEL_SMALL}. Have you run 'python -m spacy download {SPACY_MODEL_SMALL}'? Error: {e}")
+        log_message(f"Error loading spaCy model {SPACY_MODEL_SMALL}. Error: {e}")
         return False
 
+    # Try to load the large model for advanced analysis
+    try:
+        print(f"\nLoading larger spaCy model '{SPACY_MODEL_LARGE}'...")
+        log_message(f"Loading larger spaCy model '{SPACY_MODEL_LARGE}'")
+        nlp_large = spacy.load(SPACY_MODEL_LARGE)
+        print(f"Larger spaCy model {SPACY_MODEL_LARGE} loaded.")
+        log_message(f"Larger spaCy model {SPACY_MODEL_LARGE} loaded.")
+    except Exception as e:
+        print(f"Warning: Could not load larger spaCy model {SPACY_MODEL_LARGE}. Using {SPACY_MODEL_SMALL} for all analyses.")
+        print(f"To use advanced features, install the larger model: python -m spacy download {SPACY_MODEL_LARGE}")
+        log_message(f"Warning: Could not load larger spaCy model {SPACY_MODEL_LARGE}. Error: {e}")
+        nlp_large = nlp  # Fall back to small model
+
+    # Try to set up coreference resolution if requested
+    if USE_COREF:
+        try:
+            print("\nSetting up coreference resolution...")
+            log_message("Setting up coreference resolution")
+
+            # Try to import neuralcoref
+            try:
+                import neuralcoref
+                # Create a new spaCy model instance for coreference
+                coref_nlp = spacy.load(SPACY_MODEL_SMALL)
+                # Add neuralcoref to the pipeline
+                neuralcoref.add_to_pipe(coref_nlp)
+                print("Coreference resolution set up successfully.")
+                log_message("Coreference resolution set up successfully.")
+            except ImportError:
+                print("Warning: neuralcoref not installed. Coreference resolution will not be available.")
+                print("To use coreference resolution, python 3.7 required: pip install neuralcoref")
+                log_message("Warning: neuralcoref not installed. Coreference resolution will not be available.")
+                coref_nlp = nlp  # Fall back to regular model
+        except Exception as e:
+            print(f"Warning: Could not set up coreference resolution. Error: {e}")
+            log_message(f"Warning: Could not set up coreference resolution. Error: {e}")
+            coref_nlp = nlp  # Fall back to regular model
+    else:
+        coref_nlp = nlp  # Use regular model if coreference not requested
+
+    return True
+
 def analyze_narrative_with_spacy(narrative_text, triplets_in_kg):
-    """Analyzes the narrative with spaCy and compares entities/relations with triplets in KG."""
-    print("\nAnalyzing narrative with spaCy...")
-    log_message("Analyzing narrative with spaCy")
+    """Analyzes the narrative with spaCy and compares entities/relations with triplets in KG.
+
+    This is the original basic implementation that only uses named entity recognition.
+    """
+    print("\nAnalyzing narrative with spaCy (Basic Method)...")
+    log_message("Analyzing narrative with spaCy (Basic Method)")
 
     if nlp is None:
         print("SpaCy model not loaded. Skipping narrative analysis.")
@@ -525,6 +653,10 @@ def analyze_narrative_with_spacy(narrative_text, triplets_in_kg):
             narrative_entities.add(ent.text.lower())
             log_message(f"SpaCy entity found: {ent.text} ({ent.label_})")
 
+        # Calculate narrative coverage rate (what percentage of words were recognized as entities)
+        total_words = len([token for token in doc if not token.is_punct and not token.is_space])
+        entity_words = sum(len(ent.text.split()) for ent in doc.ents)
+        narrative_coverage = (entity_words / total_words) * 100 if total_words > 0 else 0
 
         # Compare entities found by spaCy with entities in the KG triplets
         kg_entities_lower = {ent.lower() for ent in kg_entities}
@@ -534,27 +666,24 @@ def analyze_narrative_with_spacy(narrative_text, triplets_in_kg):
                 kg_entities_in_narrative += 1
                 log_message(f"KG entity '{kg_ent_lower}' found in narrative.")
 
-        # TODO: More advanced spaCy analysis (e.g., dependency parsing to find relationships)
-        # This is the complex part dependent on your PoC goals for spaCy's role.
-        # For now, we focus on entity presence as a simple metric.
-
         match_percentage = (kg_entities_in_narrative / len(kg_entities)) * 100 if kg_entities else 0
 
-        print(f"SpaCy Analysis Results:")
+        print(f"SpaCy Analysis Results (Basic Method):")
         print(f"  Entities in Narrative (found by spaCy): {len(narrative_entities)}")
         print(f"  Entities in KG (from added triplets): {len(kg_entities)}")
         print(f"  KG Entities found in Narrative: {kg_entities_in_narrative}")
         print(f"  Entity Presence Match Percentage: {match_percentage:.2f}%")
+        print(f"  Narrative Coverage Rate: {narrative_coverage:.2f}%")
 
-        log_message(f"SpaCy Analysis Results: Narrative entities={len(narrative_entities)}, KG entities={len(kg_entities)}, KG entities in narrative={kg_entities_in_narrative}, Match Percentage={match_percentage:.2f}%")
-
+        log_message(f"SpaCy Analysis Results (Basic): Narrative entities={len(narrative_entities)}, KG entities={len(kg_entities)}, KG entities in narrative={kg_entities_in_narrative}, Match Percentage={match_percentage:.2f}%, Coverage={narrative_coverage:.2f}%")
 
         return {
             "status": "completed",
             "match_percentage": match_percentage,
             "kg_entity_count": len(kg_entities),
             "narrative_entity_count": len(narrative_entities),
-            "kg_entities_in_narrative": kg_entities_in_narrative
+            "kg_entities_in_narrative": kg_entities_in_narrative,
+            "narrative_coverage": narrative_coverage
             }
 
     except Exception as e:
@@ -562,18 +691,712 @@ def analyze_narrative_with_spacy(narrative_text, triplets_in_kg):
         log_message(f"Error during spaCy analysis: {e}")
         return {"status": "error", "error": str(e)}
 
+def analyze_narrative_enhanced(narrative_text, triplets_in_kg):
+    """Enhanced analysis of narrative with improved entity matching.
+
+    This implementation adds noun chunks and partial matching to improve entity detection.
+    """
+    print("\nAnalyzing narrative with Enhanced Entity Matching...")
+    log_message("Analyzing narrative with Enhanced Entity Matching")
+
+    if nlp is None:
+        print("SpaCy model not loaded. Skipping narrative analysis.")
+        log_message("SpaCy model not loaded. Skipping narrative analysis.")
+        return {"status": "skipped", "match_percentage": 0}
+
+    if not narrative_text:
+        print("No narrative text to analyze.")
+        log_message("No narrative text to analyze.")
+        return {"status": "skipped", "match_percentage": 0}
+
+    if not triplets_in_kg:
+        print("No triplets found in KG to compare against analysis.")
+        log_message("No triplets found in KG to compare against analysis.")
+        kg_entities = set()
+    else:
+        # Extract unique entities from KG triplets
+        kg_entities = set()
+        for s, p, o in triplets_in_kg:
+            kg_entities.add(s)
+            kg_entities.add(o)
+        print(f"KG contains {len(kg_entities)} unique entities from added triplets.")
+        log_message(f"KG contains {len(kg_entities)} unique entities from added triplets.")
+
+    try:
+        # Process the narrative
+        doc = nlp(narrative_text)
+
+        # 1. Extract named entities
+        named_entities = set()
+        for ent in doc.ents:
+            named_entities.add(ent.text.lower())
+            log_message(f"SpaCy named entity found: {ent.text} ({ent.label_})")
+
+        # 2. Extract noun chunks (helps with compound names)
+        noun_chunks = set()
+        for chunk in doc.noun_chunks:
+            noun_chunks.add(chunk.text.lower())
+            log_message(f"SpaCy noun chunk found: {chunk.text}")
+
+        # 3. Extract individual nouns
+        individual_nouns = set()
+        for token in doc:
+            if token.pos_ == "NOUN" or token.pos_ == "PROPN":
+                individual_nouns.add(token.text.lower())
+                log_message(f"SpaCy noun found: {token.text} ({token.pos_})")
+
+        # Combine all potential entity mentions
+        all_potential_entities = named_entities.union(noun_chunks).union(individual_nouns)
+
+        # Calculate narrative coverage rate
+        total_words = len([token for token in doc if not token.is_punct and not token.is_space])
+        entity_words = sum(len(entity.split()) for entity in all_potential_entities)
+        narrative_coverage = (entity_words / total_words) * 100 if total_words > 0 else 0
+
+        # Normalize KG entities
+        kg_entities_lower = {ent.lower() for ent in kg_entities}
+
+        # Match entities using multiple strategies
+        matched_entities = set()
+        match_details = {}
+
+        for kg_ent in kg_entities_lower:
+            # Strategy 1: Direct matching
+            if kg_ent in all_potential_entities:
+                matched_entities.add(kg_ent)
+                match_details[kg_ent] = "direct_match"
+                log_message(f"KG entity '{kg_ent}' found in narrative (direct match).")
+                continue
+
+            # Strategy 2: Partial matching for multi-word entities
+            for pot_ent in all_potential_entities:
+                # Check if KG entity is contained within a longer entity or vice versa
+                if (len(kg_ent.split()) > 1 or len(pot_ent.split()) > 1) and \
+                   (kg_ent in pot_ent or pot_ent in kg_ent):
+                    matched_entities.add(kg_ent)
+                    match_details[kg_ent] = f"partial_match_with_{pot_ent}"
+                    log_message(f"KG entity '{kg_ent}' found in narrative (partial match with '{pot_ent}').")
+                    break
+
+        # Calculate match percentage
+        match_percentage = (len(matched_entities) / len(kg_entities)) * 100 if kg_entities else 0
+
+        # Log results
+        print(f"Enhanced Entity Matching Results:")
+        print(f"  All potential entities in narrative: {len(all_potential_entities)}")
+        print(f"  Entities in KG: {len(kg_entities)}")
+        print(f"  KG Entities matched in narrative: {len(matched_entities)}")
+        print(f"  Entity Match Percentage: {match_percentage:.2f}%")
+        print(f"  Narrative Coverage Rate: {narrative_coverage:.2f}%")
+
+        for kg_ent in kg_entities_lower:
+            status = "✓ MATCHED" if kg_ent in matched_entities else "✗ NOT MATCHED"
+            details = match_details.get(kg_ent, "")
+            print(f"  {kg_ent}: {status} {details}")
+
+        log_message(f"Enhanced Entity Matching Results: Potential entities={len(all_potential_entities)}, KG entities={len(kg_entities)}, Matched={len(matched_entities)}, Match Percentage={match_percentage:.2f}%, Coverage={narrative_coverage:.2f}%")
+
+        return {
+            "status": "completed",
+            "match_percentage": match_percentage,
+            "kg_entity_count": len(kg_entities),
+            "narrative_entity_count": len(all_potential_entities),
+            "kg_entities_matched": len(matched_entities),
+            "matched_entities": list(matched_entities),
+            "match_details": match_details,
+            "narrative_coverage": narrative_coverage
+        }
+
+    except Exception as e:
+        print(f"Error during enhanced narrative analysis: {e}")
+        log_message(f"Error during enhanced narrative analysis: {e}")
+        return {"status": "error", "error": str(e)}
+
+def analyze_with_semantic_similarity(narrative_text, triplets_in_kg):
+    """Analyzes narrative using semantic similarity with word vectors.
+
+    This implementation uses the larger spaCy model with word vectors to find
+    semantically similar entities even when they don't match exactly.
+    """
+    print("\nAnalyzing narrative with Semantic Similarity Matching...")
+    log_message("Analyzing narrative with Semantic Similarity Matching")
+
+    if nlp_large is None:
+        print("Larger spaCy model not loaded. Skipping semantic similarity analysis.")
+        log_message("Larger spaCy model not loaded. Skipping semantic similarity analysis.")
+        return {"status": "skipped", "match_percentage": 0}
+
+    if not narrative_text:
+        print("No narrative text to analyze.")
+        log_message("No narrative text to analyze.")
+        return {"status": "skipped", "match_percentage": 0}
+
+    if not triplets_in_kg:
+        print("No triplets found in KG to compare against analysis.")
+        log_message("No triplets found in KG to compare against analysis.")
+        kg_entities = set()
+    else:
+        # Extract unique entities from KG triplets
+        kg_entities = set()
+        for s, p, o in triplets_in_kg:
+            kg_entities.add(s)
+            kg_entities.add(o)
+        print(f"KG contains {len(kg_entities)} unique entities from added triplets.")
+        log_message(f"KG contains {len(kg_entities)} unique entities from added triplets.")
+
+    try:
+        # Process the narrative with the larger model that has word vectors
+        doc = nlp_large(narrative_text)
+
+        # Extract potential entities (named entities and noun chunks)
+        named_entities = list(doc.ents)
+        noun_chunks = list(doc.noun_chunks)
+
+        # Combine all potential entity mentions
+        potential_entities = named_entities + noun_chunks
+
+        # Log the potential entities
+        for ent in named_entities:
+            log_message(f"Named entity for similarity matching: {ent.text} ({ent.label_})")
+        for chunk in noun_chunks:
+            log_message(f"Noun chunk for similarity matching: {chunk.text}")
+
+        # Calculate narrative coverage
+        total_words = len([token for token in doc if not token.is_punct and not token.is_space])
+        entity_words = sum(len(ent.text.split()) for ent in potential_entities)
+        narrative_coverage = (entity_words / total_words) * 100 if total_words > 0 else 0
+
+        # Normalize KG entities
+        kg_entities_lower = {ent.lower() for ent in kg_entities}
+
+        # Track matches with similarity scores
+        matched_entities = set()
+        similarity_scores = {}
+
+        # Similarity threshold (adjust as needed)
+        SIMILARITY_THRESHOLD = 0.6
+
+        # Compare each KG entity with each potential entity in the narrative
+        for kg_ent in kg_entities_lower:
+            # Create a Doc object for the KG entity
+            kg_ent_doc = nlp_large(kg_ent)
+
+            best_match = None
+            best_score = 0.0
+
+            # Check each potential entity for similarity
+            for pot_ent in potential_entities:
+                # Skip if the potential entity has no vector (rare but possible)
+                if not pot_ent.vector_norm or not kg_ent_doc.vector_norm:
+                    continue
+
+                # Calculate similarity score
+                similarity = kg_ent_doc.similarity(pot_ent)
+
+                # Update if this is the best match so far
+                if similarity > best_score and similarity > SIMILARITY_THRESHOLD:
+                    best_score = similarity
+                    best_match = pot_ent.text
+
+            # If we found a good match, record it
+            if best_match:
+                matched_entities.add(kg_ent)
+                similarity_scores[kg_ent] = (best_match, best_score)
+                log_message(f"KG entity '{kg_ent}' semantically similar to '{best_match}' (score: {best_score:.2f})")
+
+        # Calculate match percentage
+        match_percentage = (len(matched_entities) / len(kg_entities)) * 100 if kg_entities else 0
+
+        # Log results
+        print(f"Semantic Similarity Matching Results:")
+        print(f"  Potential entities in narrative: {len(potential_entities)}")
+        print(f"  Entities in KG: {len(kg_entities)}")
+        print(f"  KG Entities matched by similarity: {len(matched_entities)}")
+        print(f"  Entity Match Percentage: {match_percentage:.2f}%")
+        print(f"  Narrative Coverage Rate: {narrative_coverage:.2f}%")
+        print(f"  Similarity Threshold: {SIMILARITY_THRESHOLD}")
+
+        for kg_ent in kg_entities_lower:
+            if kg_ent in matched_entities:
+                match_text, score = similarity_scores[kg_ent]
+                print(f"  {kg_ent}: ✓ MATCHED with '{match_text}' (score: {score:.2f})")
+            else:
+                print(f"  {kg_ent}: ✗ NOT MATCHED")
+
+        log_message(f"Semantic Similarity Results: Potential entities={len(potential_entities)}, KG entities={len(kg_entities)}, Matched={len(matched_entities)}, Match Percentage={match_percentage:.2f}%, Coverage={narrative_coverage:.2f}%")
+
+        return {
+            "status": "completed",
+            "match_percentage": match_percentage,
+            "kg_entity_count": len(kg_entities),
+            "narrative_entity_count": len(potential_entities),
+            "kg_entities_matched": len(matched_entities),
+            "matched_entities": list(matched_entities),
+            "similarity_scores": similarity_scores,
+            "narrative_coverage": narrative_coverage
+        }
+
+    except Exception as e:
+        print(f"Error during semantic similarity analysis: {e}")
+        log_message(f"Error during semantic similarity analysis: {e}")
+        return {"status": "error", "error": str(e)}
+
+def analyze_with_coreference(narrative_text, triplets_in_kg):
+    """Analyzes narrative with coreference resolution to link pronouns to their referents.
+
+    This implementation uses the spaCy model with coreference resolution to improve
+    entity detection by resolving pronouns to their referents.
+    """
+    print("\nAnalyzing narrative with Coreference Resolution...")
+    log_message("Analyzing narrative with Coreference Resolution")
+
+    if coref_nlp is None:
+        print("Coreference resolution not available. Skipping coreference analysis.")
+        log_message("Coreference resolution not available. Skipping coreference analysis.")
+        return {"status": "skipped", "match_percentage": 0}
+
+    if not narrative_text:
+        print("No narrative text to analyze.")
+        log_message("No narrative text to analyze.")
+        return {"status": "skipped", "match_percentage": 0}
+
+    if not triplets_in_kg:
+        print("No triplets found in KG to compare against analysis.")
+        log_message("No triplets found in KG to compare against analysis.")
+        kg_entities = set()
+    else:
+        # Extract unique entities from KG triplets
+        kg_entities = set()
+        for s, p, o in triplets_in_kg:
+            kg_entities.add(s)
+            kg_entities.add(o)
+        print(f"KG contains {len(kg_entities)} unique entities from added triplets.")
+        log_message(f"KG contains {len(kg_entities)} unique entities from added triplets.")
+
+    try:
+        # Process the narrative with coreference resolution
+        doc = coref_nlp(narrative_text)
+
+        # Check if coreference resolution is available
+        if not hasattr(doc, '_.coref_clusters'):
+            print("Coreference resolution not properly set up. Skipping coreference analysis.")
+            log_message("Coreference resolution not properly set up. Skipping coreference analysis.")
+            return {"status": "skipped", "reason": "Coreference resolution not properly set up"}
+
+        # Get coreference clusters
+        coref_clusters = doc._.coref_clusters
+
+        # Create a resolved text by replacing pronouns with their referents
+        resolved_text = narrative_text
+
+        # Track coreference resolutions
+        coref_resolutions = []
+
+        # Replace pronouns with their referents in the text
+        if coref_clusters:
+            for cluster in coref_clusters:
+                # Get the main mention (usually the first non-pronoun mention)
+                main_mention = cluster.main
+
+                # Replace each mention with the main mention
+                for mention in cluster.mentions:
+                    if mention.text.lower() != main_mention.text.lower():
+                        coref_resolutions.append((mention.text, main_mention.text))
+                        log_message(f"Coreference resolution: '{mention.text}' -> '{main_mention.text}'")
+
+        # Log the resolved text
+        if coref_resolutions:
+            print("Coreference resolutions found:")
+            for mention, referent in coref_resolutions:
+                print(f"  '{mention}' refers to '{referent}'")
+
+            # Create a simple resolved text for demonstration
+            resolved_text = narrative_text
+            for mention, referent in coref_resolutions:
+                resolved_text = resolved_text.replace(mention, f"{mention}[={referent}]")
+
+            print("\nText with coreference annotations:")
+            print(resolved_text)
+        else:
+            print("No coreference resolutions found in the text.")
+
+        # Now analyze the resolved text using the enhanced entity matching
+        # Process the narrative with the resolved text
+        doc = nlp(resolved_text)
+
+        # Extract entities as in the enhanced method
+        named_entities = set()
+        for ent in doc.ents:
+            named_entities.add(ent.text.lower())
+            log_message(f"Named entity after coreference: {ent.text} ({ent.label_})")
+
+        noun_chunks = set()
+        for chunk in doc.noun_chunks:
+            noun_chunks.add(chunk.text.lower())
+            log_message(f"Noun chunk after coreference: {chunk.text}")
+
+        # Add resolved entities from coreference
+        resolved_entities = set()
+        for mention, referent in coref_resolutions:
+            resolved_entities.add(referent.lower())
+            log_message(f"Resolved entity from coreference: {referent}")
+
+        # Combine all potential entity mentions
+        all_potential_entities = named_entities.union(noun_chunks).union(resolved_entities)
+
+        # Calculate narrative coverage
+        total_words = len([token for token in doc if not token.is_punct and not token.is_space])
+        entity_words = sum(len(entity.split()) for entity in all_potential_entities)
+        narrative_coverage = (entity_words / total_words) * 100 if total_words > 0 else 0
+
+        # Normalize KG entities
+        kg_entities_lower = {ent.lower() for ent in kg_entities}
+
+        # Match entities using multiple strategies
+        matched_entities = set()
+        match_details = {}
+
+        for kg_ent in kg_entities_lower:
+            # Strategy 1: Direct matching
+            if kg_ent in all_potential_entities:
+                matched_entities.add(kg_ent)
+                match_details[kg_ent] = "direct_match"
+                log_message(f"KG entity '{kg_ent}' found after coreference (direct match).")
+                continue
+
+            # Strategy 2: Partial matching for multi-word entities
+            for pot_ent in all_potential_entities:
+                # Check if KG entity is contained within a longer entity or vice versa
+                if (len(kg_ent.split()) > 1 or len(pot_ent.split()) > 1) and \
+                   (kg_ent in pot_ent or pot_ent in kg_ent):
+                    matched_entities.add(kg_ent)
+                    match_details[kg_ent] = f"partial_match_with_{pot_ent}"
+                    log_message(f"KG entity '{kg_ent}' found after coreference (partial match with '{pot_ent}').")
+                    break
+
+        # Calculate match percentage
+        match_percentage = (len(matched_entities) / len(kg_entities)) * 100 if kg_entities else 0
+
+        # Log results
+        print(f"Coreference Resolution Results:")
+        print(f"  Coreference resolutions found: {len(coref_resolutions)}")
+        print(f"  All potential entities after resolution: {len(all_potential_entities)}")
+        print(f"  Entities in KG: {len(kg_entities)}")
+        print(f"  KG Entities matched after resolution: {len(matched_entities)}")
+        print(f"  Entity Match Percentage: {match_percentage:.2f}%")
+        print(f"  Narrative Coverage Rate: {narrative_coverage:.2f}%")
+
+        for kg_ent in kg_entities_lower:
+            status = "✓ MATCHED" if kg_ent in matched_entities else "✗ NOT MATCHED"
+            details = match_details.get(kg_ent, "")
+            print(f"  {kg_ent}: {status} {details}")
+
+        log_message(f"Coreference Resolution Results: Resolutions={len(coref_resolutions)}, Potential entities={len(all_potential_entities)}, KG entities={len(kg_entities)}, Matched={len(matched_entities)}, Match Percentage={match_percentage:.2f}%, Coverage={narrative_coverage:.2f}%")
+
+        return {
+            "status": "completed",
+            "match_percentage": match_percentage,
+            "kg_entity_count": len(kg_entities),
+            "narrative_entity_count": len(all_potential_entities),
+            "kg_entities_matched": len(matched_entities),
+            "matched_entities": list(matched_entities),
+            "match_details": match_details,
+            "coref_resolutions": coref_resolutions,
+            "narrative_coverage": narrative_coverage
+        }
+
+    except Exception as e:
+        print(f"Error during coreference analysis: {e}")
+        log_message(f"Error during coreference analysis: {e}")
+        return {"status": "error", "error": str(e)}
+
+def extract_potential_triplets(narrative_text):
+    """Extract potential new triplets from the narrative using dependency parsing.
+
+    This function identifies subject-verb-object patterns in the text that could
+    represent new knowledge to add to the KG.
+    """
+    print("\nExtracting potential new triplets from narrative...")
+    log_message("Extracting potential new triplets from narrative")
+
+    if nlp is None or not narrative_text:
+        return {"status": "skipped", "potential_triplets": []}
+
+    try:
+        # Process the narrative
+        doc = nlp(narrative_text)
+
+        # Store potential triplets
+        potential_triplets = []
+
+        # Analyze each sentence
+        for sent in doc.sents:
+            # Find verbs that might be predicates
+            for token in sent:
+                if token.pos_ == "VERB":
+                    # Find subjects
+                    subjects = []
+                    for child in token.children:
+                        if child.dep_ in ("nsubj", "nsubjpass"):
+                            # Get the full noun phrase
+                            subject_span = get_span_for_token(child)
+                            subjects.append(subject_span.text)
+
+                    # Find objects
+                    objects = []
+                    for child in token.children:
+                        if child.dep_ in ("dobj", "pobj", "attr"):
+                            # Get the full noun phrase
+                            object_span = get_span_for_token(child)
+                            objects.append(object_span.text)
+
+                    # Create triplets from all subject-object combinations
+                    for subj in subjects:
+                        for obj in objects:
+                            if subj and obj:  # Ensure both subject and object exist
+                                triplet = (subj, token.lemma_, obj)
+                                potential_triplets.append(triplet)
+                                log_message(f"Potential triplet found: {triplet}")
+
+        # Log results
+        if potential_triplets:
+            print(f"Found {len(potential_triplets)} potential new triplets:")
+            for s, p, o in potential_triplets:
+                print(f"  ({s}, {p}, {o})")
+        else:
+            print("No potential new triplets found in the narrative.")
+
+        log_message(f"Potential triplet extraction completed. Found {len(potential_triplets)} triplets.")
+
+        return {
+            "status": "completed",
+            "potential_triplets": potential_triplets
+        }
+
+    except Exception as e:
+        print(f"Error during potential triplet extraction: {e}")
+        log_message(f"Error during potential triplet extraction: {e}")
+        return {"status": "error", "error": str(e), "potential_triplets": []}
+
+def extract_enhanced_triplets(narrative_text):
+    """Extract potential new triplets with enhanced relation extraction.
+
+    This function uses more sophisticated patterns and the larger model
+    to extract higher-quality triplets from the narrative.
+    """
+    print("\nExtracting enhanced triplets from narrative...")
+    log_message("Extracting enhanced triplets from narrative")
+
+    if nlp_large is None or not narrative_text:
+        print("Larger spaCy model not loaded. Falling back to basic model.")
+        log_message("Larger spaCy model not loaded. Falling back to basic model.")
+        # Fall back to the basic model if the larger one isn't available
+        return extract_potential_triplets(narrative_text)
+
+    try:
+        # Process the narrative with the larger model
+        doc = nlp_large(narrative_text)
+
+        # Try to use coreference resolution if available
+        resolved_text = narrative_text
+        if coref_nlp is not None and USE_COREF:
+            try:
+                coref_doc = coref_nlp(narrative_text)
+                if hasattr(coref_doc, '_.coref_clusters'):
+                    # Get coreference clusters
+                    coref_clusters = coref_doc._.coref_clusters
+
+                    # Replace pronouns with their referents
+                    if coref_clusters:
+                        # Create a simple resolved text
+                        for cluster in coref_clusters:
+                            main_mention = cluster.main
+                            for mention in cluster.mentions:
+                                if mention.text.lower() != main_mention.text.lower():
+                                    # Replace the mention with the main mention
+                                    resolved_text = resolved_text.replace(mention.text, main_mention.text)
+
+                        print("Applied coreference resolution for triplet extraction.")
+                        log_message("Applied coreference resolution for triplet extraction.")
+
+                        # Re-process with the resolved text
+                        doc = nlp_large(resolved_text)
+            except Exception as e:
+                print(f"Warning: Could not apply coreference resolution: {e}")
+                log_message(f"Warning: Could not apply coreference resolution: {e}")
+
+        # Store potential triplets
+        potential_triplets = []
+
+        # Track entities for better triplet extraction
+        entities = {}
+        for ent in doc.ents:
+            entities[ent.text] = ent.label_
+
+        # Enhanced patterns for triplet extraction
+        # 1. Subject-Verb-Object pattern (basic)
+        # 2. Subject-Verb-Preposition-Object pattern (e.g., "lives in Wonderland")
+        # 3. Subject-Verb-Adjective pattern (e.g., "is curious")
+        # 4. Possessive pattern (e.g., "Alice's rabbit")
+
+        # Analyze each sentence
+        for sent in doc.sents:
+            # Pattern 1 & 2: Find verbs and their arguments
+            for token in sent:
+                if token.pos_ == "VERB":
+                    # Find subjects
+                    subjects = []
+                    for child in token.children:
+                        if child.dep_ in ("nsubj", "nsubjpass"):
+                            # Get the full noun phrase
+                            subject_span = get_span_for_token(child)
+                            subjects.append(subject_span.text)
+
+                    # Find direct objects
+                    direct_objects = []
+                    for child in token.children:
+                        if child.dep_ == "dobj":
+                            # Get the full noun phrase
+                            object_span = get_span_for_token(child)
+                            direct_objects.append(object_span.text)
+
+                    # Find prepositional objects
+                    prep_objects = []
+                    for child in token.children:
+                        if child.dep_ == "prep":
+                            for prep_child in child.children:
+                                if prep_child.dep_ == "pobj":
+                                    # Create a predicate from verb + preposition
+                                    predicate = f"{token.lemma_}_{child.text}"
+                                    # Get the full noun phrase
+                                    object_span = get_span_for_token(prep_child)
+                                    prep_objects.append((predicate, object_span.text))
+
+                    # Find attributes (for "is a" relationships)
+                    attributes = []
+                    for child in token.children:
+                        if child.dep_ == "attr":
+                            # Get the full noun phrase
+                            attr_span = get_span_for_token(child)
+                            attributes.append(attr_span.text)
+
+                    # Create triplets from subject-verb-object
+                    for subj in subjects:
+                        # Direct objects
+                        for obj in direct_objects:
+                            if subj and obj:
+                                triplet = (subj, token.lemma_, obj)
+                                potential_triplets.append(triplet)
+                                log_message(f"Enhanced triplet (SVO): {triplet}")
+
+                        # Prepositional objects
+                        for pred, obj in prep_objects:
+                            if subj and obj:
+                                triplet = (subj, pred, obj)
+                                potential_triplets.append(triplet)
+                                log_message(f"Enhanced triplet (SVPO): {triplet}")
+
+                        # Attributes (especially for "is a" relationships)
+                        for attr in attributes:
+                            if subj and attr and token.lemma_ in ["be", "become", "remain"]:
+                                # Check if this might be an "is_a" relationship
+                                if any(det.dep_ == "det" and det.text.lower() in ["a", "an"] for det in token.children):
+                                    triplet = (subj, "is_a", attr)
+                                else:
+                                    triplet = (subj, token.lemma_, attr)
+                                potential_triplets.append(triplet)
+                                log_message(f"Enhanced triplet (SVA): {triplet}")
+
+            # Pattern 3: Possessive relationships
+            for token in sent:
+                if token.dep_ == "poss":
+                    # Get the possessor (e.g., "Alice" in "Alice's rabbit")
+                    possessor = token.text
+
+                    # Get the possessed (e.g., "rabbit" in "Alice's rabbit")
+                    if token.head:
+                        possessed = get_span_for_token(token.head).text
+
+                        # Create a "has" or "owns" relationship
+                        triplet = (possessor, "has", possessed)
+                        potential_triplets.append(triplet)
+                        log_message(f"Enhanced triplet (possessive): {triplet}")
+
+        # Filter out duplicate triplets
+        unique_triplets = []
+        seen = set()
+        for s, p, o in potential_triplets:
+            triplet_key = (s.lower(), p.lower(), o.lower())
+            if triplet_key not in seen:
+                seen.add(triplet_key)
+                unique_triplets.append((s, p, o))
+
+        # Log results
+        if unique_triplets:
+            print(f"Found {len(unique_triplets)} potential new triplets (enhanced):")
+            for s, p, o in unique_triplets:
+                print(f"  ({s}, {p}, {o})")
+        else:
+            print("No potential new triplets found in the narrative (enhanced).")
+
+        log_message(f"Enhanced triplet extraction completed. Found {len(unique_triplets)} unique triplets.")
+
+        # Save the enhanced triplets to the report file
+        try:
+            with open("autoUpdateKGfromResponse.txt", "a", encoding="utf-8") as f:
+                f.write("\n\n# Enhanced Triplet Extraction Results\n\n")
+                f.write(f"Date: {datetime.datetime.now().isoformat()}\n\n")
+                f.write("The following triplets were extracted using enhanced relation extraction techniques:\n\n")
+                for s, p, o in unique_triplets:
+                    f.write(f"* ({s}, {p}, {o})\n")
+                f.write("\nThese triplets represent potential new knowledge that could be added to the Knowledge Graph.\n")
+            print(f"Enhanced triplets saved to autoUpdateKGfromResponse.txt")
+            log_message(f"Enhanced triplets saved to autoUpdateKGfromResponse.txt")
+        except Exception as e:
+            print(f"Error saving enhanced triplets to file: {e}")
+            log_message(f"Error saving enhanced triplets to file: {e}")
+
+        return {
+            "status": "completed",
+            "potential_triplets": unique_triplets
+        }
+
+    except Exception as e:
+        print(f"Error during enhanced triplet extraction: {e}")
+        log_message(f"Error during enhanced triplet extraction: {e}")
+        return {"status": "error", "error": str(e), "potential_triplets": []}
+
+def get_span_for_token(token):
+    """Helper function to get the full noun phrase span for a token."""
+    # If token is part of a noun chunk, return the whole chunk
+    for chunk in token.doc.noun_chunks:
+        if token in chunk:
+            return chunk
+
+    # Otherwise, just return the token itself as a span
+    return token
+
 
 # --- Main Test Runner Function ---
 
-def run_tests(start_test_number=1, config_path=None):
-    """Runs the sequence of tests starting from start_test_number."""
+def run_tests(start_test_number=1, config_path=None, use_file_response=False, file_response_path="Raw Response Text.txt"):
+    """Runs the sequence of tests starting from start_test_number.
 
+    If use_file_response is True, uses the content from file_response_path instead of making an API call.
+    """
     print(f"\n--- Starting PoC Test Sequence from Test {start_test_number} ---")
     log_message(f"--- Starting PoC Test Sequence from Test {start_test_number} ---")
     log_message(f"Using config file: {config_path}")
 
+    if use_file_response:
+        print(f"Using file-based response from {file_response_path} instead of making API calls")
+        log_message(f"Using file-based response from {file_response_path}")
+
     test_results = {} # Dictionary to store results of each test
-    shared_data = {} # Dictionary to pass data between tests (e.g., loaded config, initial data)
+    shared_data = {
+        'use_file_response': use_file_response,
+        'file_response_path': file_response_path
+    } # Dictionary to pass data between tests (e.g., loaded config, initial data)
 
     # Define the ordered list of tests
     # Each tuple: (test_number, test_function, list_of_required_shared_data_keys)
@@ -585,7 +1408,9 @@ def run_tests(start_test_number=1, config_path=None):
         (5, lambda: test_5_core_poc_logic(
             config=shared_data.get('config'),
             neo4j_driver=neo4j_driver, # global driver
-            initial_data=shared_data.get('initial_data') # (expected_triplets, base_story) tuple
+            initial_data=shared_data.get('initial_data'), # (expected_triplets, base_story) tuple
+            use_file_response=shared_data.get('use_file_response', False),
+            file_path=shared_data.get('file_response_path', "Raw Response Text.txt")
             ), ['config', 'initial_data']), # Requires config from test 3, data from test 4
 
         # Add more tests here as needed for further validation or analysis steps
@@ -599,12 +1424,35 @@ def run_tests(start_test_number=1, config_path=None):
              triplets_in_kg=shared_data.get('llm_parsed_triplets') # from test 5 (triplets added to KG)
              ), ['llm_narrative', 'llm_parsed_triplets']), # Requires LLM output from test 5
 
+        (8, lambda: test_8_enhanced_entity_matching(
+             narrative_text=shared_data.get('llm_narrative'), # from test 5
+             triplets_in_kg=shared_data.get('llm_parsed_triplets') # from test 5 (triplets added to KG)
+             ), ['llm_narrative', 'llm_parsed_triplets']), # Requires LLM output from test 5
+
+        (9, lambda: test_9_potential_triplet_extraction(
+             narrative_text=shared_data.get('llm_narrative') # from test 5
+             ), ['llm_narrative']), # Requires narrative from test 5
+
+        (10, lambda: test_10_semantic_similarity(
+             narrative_text=shared_data.get('llm_narrative'), # from test 5
+             triplets_in_kg=shared_data.get('llm_parsed_triplets') # from test 5 (triplets added to KG)
+             ), ['llm_narrative', 'llm_parsed_triplets']), # Requires LLM output from test 5
+
+        (11, lambda: test_11_coreference_resolution(
+             narrative_text=shared_data.get('llm_narrative'), # from test 5
+             triplets_in_kg=shared_data.get('llm_parsed_triplets') # from test 5 (triplets added to KG)
+             ), ['llm_narrative', 'llm_parsed_triplets']), # Requires LLM output from test 5
+
+        (12, lambda: test_12_enhanced_triplet_extraction(
+             narrative_text=shared_data.get('llm_narrative') # from test 5
+             ), ['llm_narrative']), # Requires narrative from test 5
+
         # Add tests for cleaning up, generating reports, etc.
     ]
 
     # Ensure spaCy model is loaded early if needed by any test we plan to run
-    # Test 7 needs it, so load it if start_test_number is 1 or less than 7.
-    if start_test_number <= 7:
+    # Tests 7-12 need it, so load it if start_test_number is 1 or less than 12.
+    if start_test_number <= 12:
          load_spacy_model()
 
 
@@ -654,11 +1502,22 @@ def run_tests(start_test_number=1, config_path=None):
             results = test_func()
             test_results[test_number] = results
             success = results.get('status') == 'completed' and results.get('found_count', 0) == len(shared_data.get('initial_data', ([],))[0]) # Check if all expected were found
-        elif test_number == 7:
-            # Test 7 returns the results dictionary
+        elif test_number in [7, 8, 9, 10, 11, 12]:
+            # Tests 7-12 return results dictionaries
             results = test_func()
             test_results[test_number] = results
             success = results.get('status') == 'completed'
+
+            # For triplet extraction tests, we don't want to stop the test sequence if no potential triplets are found
+            if test_number in [9, 12] and success and not results.get('potential_triplets'):
+                print("Note: No potential triplets found, but test is considered successful.")
+                log_message("Note: No potential triplets found, but test is considered successful.")
+
+            # For semantic similarity and coreference tests, we don't want to stop if the model isn't available
+            if test_number in [10, 11] and results.get('status') == 'skipped':
+                print(f"Note: Test {test_number} was skipped, but continuing test sequence.")
+                log_message(f"Note: Test {test_number} was skipped, but continuing test sequence.")
+                success = True
         else:
              # For other tests, assume they return boolean success
              success = test_func()
@@ -690,10 +1549,17 @@ def run_tests(start_test_number=1, config_path=None):
     # TODO: Generate final summary report based on test_results
 
 # --- Core PoC Logic (Test 5) ---
-def test_5_core_poc_logic(config, neo4j_driver, initial_data):
-    """Test 5: Executes the core PoC logic: call LLM, parse, update Neo4j."""
+def test_5_core_poc_logic(config, neo4j_driver, initial_data, use_file_response=False, file_path="Raw Response Text.txt"):
+    """Test 5: Executes the core PoC logic: call LLM, parse, update Neo4j.
+
+    If use_file_response is True, uses the content from file_path instead of making an API call.
+    """
     print("\n--- Running Test 5: Core PoC Logic (LLM Call, Parse, Neo4j Update) ---")
     log_message("Running Test 5: Core PoC Logic")
+
+    if use_file_response:
+        print(f"Note: Using file-based response from {file_path} instead of making an API call")
+        log_message(f"Note: Using file-based response from {file_path}")
 
     if not config or not initial_data or not neo4j_driver:
         print("Test 5 Failed: Missing configuration, initial data, or Neo4j driver.")
@@ -747,7 +1613,15 @@ def test_5_core_poc_logic(config, neo4j_driver, initial_data):
 
 
     # --- 5.2 Call LLM API ---
-    llm_response_json = call_llm_api(api_name, model_name, system_prompt_template, query_prompt, model_params)
+    llm_response_json = call_llm_api(
+        api_name,
+        model_name,
+        system_prompt_template,
+        query_prompt,
+        model_params,
+        use_file_response=use_file_response,
+        file_path=file_path
+    )
 
     if llm_response_json is None:
         print("Test 5 Failed: LLM API call failed.")
@@ -800,9 +1674,12 @@ def test_6_verify_neo4j_against_expected(neo4j_driver, initial_data):
 
 # --- SpaCy Analysis Test (Test 7) ---
 def test_7_spacy_analysis(narrative_text, triplets_in_kg):
-    """Test 7: Analyzes LLM narrative with spaCy and compares to triplets actually added to KG."""
-    print("\n--- Running Test 7: SpaCy Analysis of Narrative ---")
-    log_message("Running Test 7: SpaCy Analysis of Narrative")
+    """Test 7: Analyzes LLM narrative with spaCy and compares to triplets actually added to KG.
+
+    This test uses the basic entity recognition method.
+    """
+    print("\n--- Running Test 7: Basic SpaCy Analysis of Narrative ---")
+    log_message("Running Test 7: Basic SpaCy Analysis of Narrative")
 
     # Note: load_spacy_model is called early in run_tests if needed.
     if nlp is None:
@@ -818,6 +1695,128 @@ def test_7_spacy_analysis(narrative_text, triplets_in_kg):
     # Pass the parsed triplets (which were used to update KG) to spaCy analysis
     # so it can compare narrative against what's *actually* in the DB from the LLM call.
     return analyze_narrative_with_spacy(narrative_text, triplets_in_kg)
+
+def test_8_enhanced_entity_matching(narrative_text, triplets_in_kg):
+    """Test 8: Analyzes LLM narrative with enhanced entity matching techniques.
+
+    This test uses noun chunks and partial matching to improve entity detection.
+    """
+    print("\n--- Running Test 8: Enhanced Entity Matching Analysis ---")
+    log_message("Running Test 8: Enhanced Entity Matching Analysis")
+
+    if nlp is None:
+         print("Test 8 Failed: SpaCy model not loaded.")
+         log_message("Test 8 Failed: SpaCy model not loaded.")
+         return {"status": "failed", "reason": "SpaCy model not loaded"}
+
+    if narrative_text is None or triplets_in_kg is None:
+        print("Test 8 Failed: Missing narrative text or triplets added to KG.")
+        log_message("Test 8 Failed: Missing narrative text or triplets added to KG.")
+        return {"status": "failed", "reason": "Missing narrative text or triplets_in_kg"}
+
+    # Use the enhanced entity matching analysis
+    return analyze_narrative_enhanced(narrative_text, triplets_in_kg)
+
+def test_9_potential_triplet_extraction(narrative_text):
+    """Test 9: Extracts potential new triplets from the narrative.
+
+    This test identifies subject-verb-object patterns that could represent
+    new knowledge to add to the KG.
+    """
+    print("\n--- Running Test 9: Potential Triplet Extraction ---")
+    log_message("Running Test 9: Potential Triplet Extraction")
+
+    if nlp is None:
+         print("Test 9 Failed: SpaCy model not loaded.")
+         log_message("Test 9 Failed: SpaCy model not loaded.")
+         return {"status": "failed", "reason": "SpaCy model not loaded"}
+
+    if narrative_text is None:
+        print("Test 9 Failed: Missing narrative text.")
+        log_message("Test 9 Failed: Missing narrative text.")
+        return {"status": "failed", "reason": "Missing narrative text"}
+
+    # Extract potential new triplets from the narrative
+    results = extract_potential_triplets(narrative_text)
+
+    # Save the potential triplets to a file for review
+    if results["status"] == "completed" and results["potential_triplets"]:
+        try:
+            with open("autoUpdateKGfromResponse.txt", "a", encoding="utf-8") as f:
+                f.write("\n\n# Potential New Triplets Extracted from Narrative\n\n")
+                f.write(f"Date: {datetime.datetime.now().isoformat()}\n\n")
+                f.write("The following triplets were automatically extracted from the narrative and could potentially be added to the Knowledge Graph:\n\n")
+                for s, p, o in results["potential_triplets"]:
+                    f.write(f"* ({s}, {p}, {o})\n")
+                f.write("\nThese triplets are provided for review and are not automatically added to the Knowledge Graph.\n")
+            print(f"Potential triplets saved to autoUpdateKGfromResponse.txt")
+            log_message(f"Potential triplets saved to autoUpdateKGfromResponse.txt")
+        except Exception as e:
+            print(f"Error saving potential triplets to file: {e}")
+            log_message(f"Error saving potential triplets to file: {e}")
+
+    return results
+
+def test_10_semantic_similarity(narrative_text, triplets_in_kg):
+    """Test 10: Analyzes LLM narrative using semantic similarity with word vectors.
+
+    This test uses the larger spaCy model with word vectors to find semantically
+    similar entities even when they don't match exactly.
+    """
+    print("\n--- Running Test 10: Semantic Similarity Analysis ---")
+    log_message("Running Test 10: Semantic Similarity Analysis")
+
+    if nlp_large is None:
+         print("Test 10 Failed: Larger spaCy model not loaded.")
+         log_message("Test 10 Failed: Larger spaCy model not loaded.")
+         return {"status": "failed", "reason": "Larger spaCy model not loaded"}
+
+    if narrative_text is None or triplets_in_kg is None:
+        print("Test 10 Failed: Missing narrative text or triplets added to KG.")
+        log_message("Test 10 Failed: Missing narrative text or triplets added to KG.")
+        return {"status": "failed", "reason": "Missing narrative text or triplets_in_kg"}
+
+    # Use semantic similarity matching
+    return analyze_with_semantic_similarity(narrative_text, triplets_in_kg)
+
+def test_11_coreference_resolution(narrative_text, triplets_in_kg):
+    """Test 11: Analyzes LLM narrative with coreference resolution.
+
+    This test uses coreference resolution to link pronouns to their referents
+    and improve entity detection.
+    """
+    print("\n--- Running Test 11: Coreference Resolution Analysis ---")
+    log_message("Running Test 11: Coreference Resolution Analysis")
+
+    if coref_nlp is None:
+         print("Test 11 Failed: Coreference resolution not available.")
+         log_message("Test 11 Failed: Coreference resolution not available.")
+         return {"status": "failed", "reason": "Coreference resolution not available"}
+
+    if narrative_text is None or triplets_in_kg is None:
+        print("Test 11 Failed: Missing narrative text or triplets added to KG.")
+        log_message("Test 11 Failed: Missing narrative text or triplets added to KG.")
+        return {"status": "failed", "reason": "Missing narrative text or triplets_in_kg"}
+
+    # Use coreference resolution analysis
+    return analyze_with_coreference(narrative_text, triplets_in_kg)
+
+def test_12_enhanced_triplet_extraction(narrative_text):
+    """Test 12: Extracts potential new triplets with enhanced relation extraction.
+
+    This test uses more sophisticated patterns and the larger model to extract
+    higher-quality triplets from the narrative.
+    """
+    print("\n--- Running Test 12: Enhanced Triplet Extraction ---")
+    log_message("Running Test 12: Enhanced Triplet Extraction")
+
+    if narrative_text is None:
+        print("Test 12 Failed: Missing narrative text.")
+        log_message("Test 12 Failed: Missing narrative text.")
+        return {"status": "failed", "reason": "Missing narrative text"}
+
+    # Extract enhanced triplets from the narrative
+    return extract_enhanced_triplets(narrative_text)
 
 
 # --- Close Resources ---

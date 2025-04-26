@@ -5,3 +5,8 @@ requests==2.31.0 # Or the latest version
 python-dotenv==1.0.0 # Or the latest version
 # configparser and argparse are built-in
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz
+# requires cl.exe from ms vc++ build tools, to test type `where cl.exe`
+# PATH must have C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.43.34808\bin\Hostx64\x64
+# or something similar, where cl.exe is located, only then you can install neuralcoref, requires python up to 3.7
+# neuralcoref
+# python -m spacy download en_core_web_lg en_core_web_sm

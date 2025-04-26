@@ -32,6 +32,10 @@ def main():
                         help="Start running tests from this number.")
     parser.add_argument("--approach", type=str, default=None,
                         help="Specify the configuration .ini file (e.g., default.ini).")
+    parser.add_argument("--use-file-response", action="store_true",
+                        help="Use file-based response instead of making API calls.")
+    parser.add_argument("--file-response-path", type=str, default="Raw Response Text.txt",
+                        help="Path to the file containing the raw response text.")
     args = parser.parse_args()
 
     # 1. Find the latest core module
@@ -76,7 +80,12 @@ def main():
 
     # 4. Run the tests from the core module
     if hasattr(core_module, 'run_tests'):
-        core_module.run_tests(start_test_number=args.test, config_path=config_path)
+        core_module.run_tests(
+            start_test_number=args.test,
+            config_path=config_path,
+            use_file_response=args.use_file_response,
+            file_response_path=args.file_response_path
+        )
     else:
         print(f"Error: Core module {latest_core_path} does not have a 'run_tests' function.")
         sys.exit(1)
