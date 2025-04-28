@@ -1,12 +1,28 @@
-# configparser and argparse are built-in
-neo4j==5.21.0 # Or the latest compatible version with your Neo4j Desktop
-requests==2.31.0 # Or the latest version
-python-dotenv==1.0.0 # Or the latest version
+# requirements.txt
+# Generated from TINS specification
+
+# PySide6 for the GUI (Version >= 6.9.0 specified in TINS)
+pyside6>=6.9.0
+
+# HTTP requests (needed by model, also used by LLM SDKs internally)
+requests
+
+# Neo4j Python driver (Version 5.21.0 specified in provided requirements stub)
+neo4j==5.21.0
+
+# For loading environment variables (like API keys, Neo4j credentials)
+python-dotenv
+
+# For robust XML parsing (crucial for LLM response and Glossary)
 lxml
-pyside6==6.9.0
+
+# SDK for Groq API
 groq
+
+# SDK for Google Gemini API
 google-genai
 
+# --- Optional/Commented out dependencies from provided stub ---
 # spacy==3.7.5 # Or the latest compatible version
 # https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz
 # requires cl.exe from ms vc++ build tools, to test type `where cl.exe`
