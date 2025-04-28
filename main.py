@@ -2163,19 +2163,35 @@ class MainWindow(QMainWindow):
         # This slot is connected to both menu actions (checkable) and combobox (currentTextChanged).
         # checked=True for menu action when selected, checked=False when deselected (ignore).
         # combobox sends no 'checked' state, so we check the sender.
-        if self.sender() == self.style_selector:
-            # Event came from combobox, apply the new text directly
-            pass  # style_name is already the current text
-        elif checked:
-            # Event came from menu action and it's checked
-            pass  # style_name is the action's text
+
+        # If this is an unchecked event from a menu action, ignore it
+        # We only want to handle checked=True events to avoid deselecting all styles
+        if not checked and self.sender() != self.style_selector:
+            return
 
         try:
             app = QApplication.instance()
             app.setStyle(QStyleFactory.create(style_name))
 
-            # Make sure the style selector (combobox) is updated if changed from menu
-            self.style_selector.setCurrentText(style_name)
+            # Update the style selector (combobox) if the event came from menu
+            if self.sender() != self.style_selector:
+                self.style_selector.blockSignals(True)  # Prevent recursion
+                self.style_selector.setCurrentText(style_name)
+                self.style_selector.blockSignals(False)
+
+            # Update all style menu actions - uncheck all except the selected one
+            for action in self.style_actions:
+                # Only set checked state if it's different from current to avoid recursion
+                if action.text() == style_name:
+                    if not action.isChecked():
+                        action.blockSignals(True)
+                        action.setChecked(True)
+                        action.blockSignals(False)
+                else:
+                    if action.isChecked():
+                        action.blockSignals(True)
+                        action.setChecked(False)
+                        action.blockSignals(False)
 
             # Reapply color scheme to work with the new style
             # Get current color scheme from settings/UI state
@@ -2351,9 +2367,18 @@ class MainWindow(QMainWindow):
         if saved_style_name in QStyleFactory.keys():
             try:
                 app.setStyle(QStyleFactory.create(saved_style_name))
-                self.style_selector.setCurrentText(
-                    saved_style_name
-                )  # Update selector UI
+
+                # Update the style selector (combobox)
+                self.style_selector.blockSignals(True)
+                self.style_selector.setCurrentText(saved_style_name)
+                self.style_selector.blockSignals(False)
+
+                # Update all style menu actions - uncheck all except the selected one
+                for action in self.style_actions:
+                    action.blockSignals(True)
+                    action.setChecked(action.text() == saved_style_name)
+                    action.blockSignals(False)
+
                 log_info(f"Applied saved style: {saved_style_name}")
             except Exception as e:
                 log_error(
@@ -2361,14 +2386,36 @@ class MainWindow(QMainWindow):
                 )
                 # Fallback to default Fusion
                 app.setStyle(QStyleFactory.create(STYLE_SELECTED_THEME))
+
+                # Update UI for fallback style
+                self.style_selector.blockSignals(True)
                 self.style_selector.setCurrentText(STYLE_SELECTED_THEME)
+                self.style_selector.blockSignals(False)
+
+                # Update menu actions for fallback style
+                for action in self.style_actions:
+                    action.blockSignals(True)
+                    action.setChecked(action.text() == STYLE_SELECTED_THEME)
+                    action.blockSignals(False)
+
                 log_warning(
                     f"Failed to apply saved style, falling back to {STYLE_SELECTED_THEME}"
                 )
         else:
             # Apply default Fusion if saved style is invalid or not available
             app.setStyle(QStyleFactory.create(STYLE_SELECTED_THEME))
+
+            # Update UI for default style
+            self.style_selector.blockSignals(True)
             self.style_selector.setCurrentText(STYLE_SELECTED_THEME)
+            self.style_selector.blockSignals(False)
+
+            # Update menu actions for default style
+            for action in self.style_actions:
+                action.blockSignals(True)
+                action.setChecked(action.text() == STYLE_SELECTED_THEME)
+                action.blockSignals(False)
+
             log_info(
                 f"No saved style found or invalid, applied default: {STYLE_SELECTED_THEME}"
             )
