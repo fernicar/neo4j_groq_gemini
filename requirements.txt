@@ -20,7 +20,7 @@ lxml
 groq
 
 # SDK for Google Gemini API
-google-genai
+google-genai>=1.12.1
 
 # --- Optional/Commented out dependencies from provided stub ---
 # spacy==3.7.5 # Or the latest compatible version

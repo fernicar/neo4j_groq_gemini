@@ -17,7 +17,8 @@ import requests
 from lxml import etree  # Recommended for robust XML parsing
 from dotenv import load_dotenv  # Requires python-dotenv
 from groq import Groq  # Groq SDK
-import google.genai as genai  # Google Gemini SDK
+from google import genai  # Google Gemini SDK
+from google.genai import types  # For type definitions
 
 # --- Configuration and Setup ---
 
@@ -275,14 +276,17 @@ class CurationModel:
         google_api_key = os.getenv("GOOGLE_API_KEY")
         if google_api_key:
             try:
-                genai.configure(api_key=google_api_key)
+                # New Google GenAI SDK uses client-based approach instead of configure()
+                self._google_client = genai.Client(api_key=google_api_key)
                 log_info("Google Generative AI SDK configured.")
             except Exception as e:
                 log_error(f"Failed to configure Google Generative AI SDK: {e}")
+                self._google_client = None
         else:
             log_warning(
                 "GOOGLE_API_KEY not found. Google LLM provider will be disabled."
             )
+            self._google_client = None
 
         log_info("CurationModel initialized.")
 
@@ -671,45 +675,38 @@ class CurationModel:
                     ):
                         self._google_api_call_timestamps.popleft()
 
-                # Adapt messages format for Google
-                # Google expects a list of Contents, each with a list of Parts
-                # Simplistic mapping: combine system/user messages into parts within a single content block
+                # For the new SDK, we need to format the content differently
+                # We'll just pass the content directly as a string
                 content_parts = []
                 for msg in messages:
-                    # Google roles can be 'user' or 'model'. Map 'system' to 'user' for simplicity here.
-                    role = (
-                        "user"
-                        if msg.get("role") == "system"
-                        else msg.get("role", "user")
-                    )
+                    # Add the message content as a string
                     if "content" in msg:
-                        content_parts.append(
-                            {"text": msg["content"]}
-                        )  # Assumes text content
+                        content_parts.append(msg["content"])
 
                 google_model_params = {}
                 # Map generic model_params keys to Google's specific names
+                # The new SDK uses the same parameter names as the API
                 if "temperature" in model_params:
-                    google_model_params["temperature"] = model_params[
-                        "temperature"
-                    ]
+                    google_model_params["temperature"] = model_params["temperature"]
                 if "max_tokens" in model_params:
-                    google_model_params["maxOutputTokens"] = model_params[
-                        "max_tokens"
-                    ]
+                    # In the new SDK, this is just max_output_tokens
+                    google_model_params["max_output_tokens"] = model_params["max_tokens"]
                 # TODO: Map other potential params like top_p etc. based on Google API spec and add safe settings
 
                 try:
-                    # Use Google GenAI SDK
-                    model = genai.GenerativeModel(model_name=model_name)
-                    response = model.generate_content(
-                        contents=[
-                            {"parts": content_parts}
-                        ],  # Structure as list of contents with parts
-                        generation_config=google_model_params,  # Pass model params
+                    # Check if Google client was successfully initialized
+                    if not self._google_client:
+                        log_error("Google client not initialized. Check API key.")
+                        return None
+
+                    # Use new Google GenAI SDK client-based approach
+                    response = self._google_client.models.generate_content(
+                        model=model_name,
+                        contents=content_parts,  # Pass content parts directly
+                        **google_model_params,  # Pass model params
                     )
+
                     # Access text via response.text
-                    # Access raw response details via response.candidates, etc.
                     # Create a dict structure that parse_llm_response_xml can handle
                     response_json = {
                         "candidates": [
@@ -721,15 +718,9 @@ class CurationModel:
                         time.time()
                     )  # Log timestamp for rate limiting
 
-                except genai.exceptions.BlockedPromptException as e:
-                    log_error(f"Google API Blocked Prompt: {e}")
-                    return None  # Indicate failure
-                except genai.exceptions.ResourceExhausted as e:
-                    # Specific Google quota error
-                    log_error(f"Google API Quota Exceeded: {e}")
-                    # TODO: Signal to UI for message box
-                    return None  # Indicate failure
                 except Exception as e:
+                    # Handle all exceptions generically for now
+                    # The new SDK may have different exception types
                     log_error(f"Error calling Google API: {e}", exc_info=True)
                     return None
 
