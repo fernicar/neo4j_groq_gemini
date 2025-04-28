@@ -558,66 +558,97 @@ class MainWindow(QMainWindow):
         # Prompt Templates Tab (View/Edit TXT files)
         prompt_templates_tab = QWidget()
         prompt_templates_layout = QVBoxLayout(prompt_templates_tab)
-        prompt_templates_layout.addWidget(QLabel("Select Prompt File:"))
-        self.prompt_template_selector = (
-            QComboBox()
-        )  # Selector for prompt files
+
+        # Create a horizontal layout for the selector and save button
+        selector_layout = QHBoxLayout()
+        selector_layout.addWidget(QLabel("Select Prompt File:"))
+        self.prompt_template_selector = QComboBox()  # Selector for prompt files
         self.prompt_template_selector.currentTextChanged.connect(
             self._load_selected_prompt_template
         )
-        prompt_templates_layout.addWidget(self.prompt_template_selector)
-        self.current_prompt_template_editor = (
-            QTextEdit()
-        )  # Editor for the selected prompt file
+        selector_layout.addWidget(self.prompt_template_selector)
+
+        # Add stretch to push the save button to the right
+        selector_layout.addStretch()
+
+        # Add save button
+        save_prompt_button = QPushButton("Save Prompt Template")
+        save_prompt_button.clicked.connect(self._save_current_prompt_template)
+        selector_layout.addWidget(save_prompt_button)
+
+        # Add the horizontal layout to the main layout
+        prompt_templates_layout.addLayout(selector_layout)
+
+        # Add the editor below
+        self.current_prompt_template_editor = QTextEdit()  # Editor for the selected prompt file
         self.current_prompt_template_editor.setPlaceholderText(
             "Load a prompt template to view/edit..."
         )
         prompt_templates_layout.addWidget(self.current_prompt_template_editor)
-        save_prompt_button = QPushButton("Save Prompt Template")
-        save_prompt_button.clicked.connect(self._save_current_prompt_template)
-        prompt_templates_layout.addWidget(
-            save_prompt_button, alignment=Qt.AlignmentFlag.AlignRight
-        )
         self.input_tabs.addTab(prompt_templates_tab, "Prompt Templates")
         self._populate_prompt_template_selector()  # Populate prompt selector on init
 
         # Config Editor Tab (View/Edit JSON config)
         config_editor_tab = QWidget()
         config_editor_layout = QVBoxLayout(config_editor_tab)
-        config_editor_layout.addWidget(QLabel("Current Config (JSON):"))
+
+        # Create a horizontal layout for the label and save button
+        config_header_layout = QHBoxLayout()
+        config_header_layout.addWidget(QLabel("Current Config (JSON):"))
+
+        # Add stretch to push the save button to the right
+        config_header_layout.addStretch()
+
+        # Add save button
+        save_config_button_tab = QPushButton("Save Config")
+        save_config_button_tab.clicked.connect(self._save_config_from_editor)
+        config_header_layout.addWidget(save_config_button_tab)
+
+        # Add the horizontal layout to the main layout
+        config_editor_layout.addLayout(config_header_layout)
+
+        # Add the editor below
         self.config_editor = QTextEdit()  # Editor for the JSON config
         self.config_editor.setPlaceholderText(
             "Load a config file to view/edit JSON..."
         )
         config_editor_layout.addWidget(self.config_editor)
-        save_config_button_tab = QPushButton("Save Config")
-        save_config_button_tab.clicked.connect(self._save_config_from_editor)
-        config_editor_layout.addWidget(
-            save_config_button_tab, alignment=Qt.AlignmentFlag.AlignRight
-        )
         self.input_tabs.addTab(config_editor_tab, "Config Editor")
         self._load_config_into_editor()  # Load initial config into editor tab
 
         # Glossary Editor Tab (View/Edit XML file)
         glossary_editor_tab = QWidget()
         glossary_editor_layout = QVBoxLayout(glossary_editor_tab)
-        glossary_editor_layout.addWidget(QLabel("Glossary (XML):"))
+
+        # Create a horizontal layout for the label and buttons
+        glossary_header_layout = QHBoxLayout()
+        glossary_header_layout.addWidget(QLabel("Glossary (XML):"))
+
+        # Add stretch to push the buttons to the right
+        glossary_header_layout.addStretch()
+
+        # Add buttons to the header layout
+        load_glossary_button = QPushButton("Load Glossary...")
+        load_glossary_button.clicked.connect(self._load_glossary_dialog)
+        glossary_header_layout.addWidget(load_glossary_button)
+
+        save_glossary_button = QPushButton("Save Glossary...")
+        save_glossary_button.clicked.connect(self._save_glossary_dialog)
+        glossary_header_layout.addWidget(save_glossary_button)
+
+        apply_glossary_button = QPushButton("Apply Glossary to KG")
+        apply_glossary_button.clicked.connect(self._apply_glossary_to_kg)
+        glossary_header_layout.addWidget(apply_glossary_button)
+
+        # Add the horizontal layout to the main layout
+        glossary_editor_layout.addLayout(glossary_header_layout)
+
+        # Add the editor below
         self.glossary_editor = QTextEdit()  # Editor for the Glossary XML
         self.glossary_editor.setPlaceholderText(
             "Load a glossary XML file to view/edit..."
         )
         glossary_editor_layout.addWidget(self.glossary_editor)
-        glossary_buttons_layout = QHBoxLayout()
-        load_glossary_button = QPushButton("Load Glossary...")
-        load_glossary_button.clicked.connect(self._load_glossary_dialog)
-        glossary_buttons_layout.addWidget(load_glossary_button)
-        save_glossary_button = QPushButton("Save Glossary...")
-        save_glossary_button.clicked.connect(self._save_glossary_dialog)
-        glossary_buttons_layout.addWidget(save_glossary_button)
-        apply_glossary_button = QPushButton("Apply Glossary to KG")
-        apply_glossary_button.clicked.connect(self._apply_glossary_to_kg)
-        glossary_buttons_layout.addWidget(apply_glossary_button)
-        glossary_editor_layout.addLayout(glossary_buttons_layout)
         self.input_tabs.addTab(glossary_editor_tab, "Glossary Editor")
         # Content loaded via load_glossary_content in __init__
 
