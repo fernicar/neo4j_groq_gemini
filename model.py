@@ -441,6 +441,25 @@ class CurationModel:
                 uri, auth=basic_auth(user, password)
             )
             self.neo4j_driver.verify_connectivity()  # Check if connection is successful
+            
+            # Create a test entity if no entities exist
+            with self.neo4j_driver.session() as session:
+                # First check if any Entity nodes exist
+                result = session.run("MATCH (n:Entity) RETURN count(n) AS count")
+                count = result.single()["count"]
+                
+                if count == 0:
+                    # Create a test entity if none exist
+                    session.run("""
+                        CREATE (n:Entity {
+                            name: 'TestEntity',
+                            status: 'Pending',
+                            provenance: ['System_Initialization'],
+                            entityType: 'Test'
+                        })
+                    """)
+                    log_info("Created test Entity node for initialization")
+            
             log_info("Neo4j connection successful.")
             return True
         except Exception as e:
